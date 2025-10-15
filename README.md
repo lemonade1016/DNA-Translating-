@@ -1,6 +1,3 @@
-Of course, here is a professional README for your GitHub project.
-
------
 
 # DNA-Translating: Translating Visual Phenotypes into Functional DNA Probes
 
@@ -14,15 +11,6 @@ The escalating threat of invasive alien species (IAS) demands rapid and scalable
 
 Our end-to-end framework consists of a **ResNet-50 feature extractor** to interpret visual phenotypes and a custom **DNA Encoder** to translate these features into nucleotide sequences. A key innovation is our **Differentiable DNA Hybridization Predictor**, a pre-trained CNN that acts as a surrogate for biophysical simulations. This predictor provides a supervisory signal during training, guiding the encoder to produce DNA sequences with high target specificity and low off-target hybridization.
 
-\!
-
-## ✨ Key Features
-
-  * **End-to-End Translation**: Directly converts organismal images into 59-nucleotide DNA probes.
-  * **Genomic-Data-Free**: Operates without needing any pre-existing DNA or RNA sequences.
-  * **High Specificity**: Achieves a mean intra-class hybridization yield of **0.973** versus a mean inter-class yield of **0.0070** computationally.
-  * **Robust Performance**: Demonstrates strong classification F1-scores ranging from **0.84 to 0.98** across six Diptera families.
-  * ***In Vitro* Validation**: The framework's predictions were successfully validated in lab experiments, confirming the functionality of the generated probes.
 
 ## 🏗️ Framework Architecture
 
@@ -35,11 +23,10 @@ The project is divided into two main components:
 
 ```
 DNA-Translating/
-├── data/                       # Placeholder for training data
-├── models/                     # Placeholder for saved model weights
-├── train_predictor.py          # Script to train the DNA Hybridization Predictor
-├── train_end_to_end.py         # Script to train the main Image-to-DNA model
-├── requirements.txt            # Project dependencies
+├── data/                                         
+├── train_predictor.py          
+├── train_end_to_end.py         
+├── requirements.txt            
 └── README.md
 ```
 
@@ -57,7 +44,7 @@ DNA-Translating/
 1.  Clone the repository:
 
     ```bash
-    git clone https://github.com/your-username/DNA-Translating.git
+    git clone https://github.com/lemonade1016/DNA-Translating.git
     cd DNA-Translating
     ```
 
@@ -87,32 +74,30 @@ DNA-Translating/
 
     This script will train the full pipeline and save the final model weights for generating DNA probes from new images.
 
+
 ## 📊 Results
 
-Our framework successfully generates highly specific DNA probes. Computationally, these probes exhibit strong binding to their intended class and minimal binding to other classes.
+Our framework demonstrates exceptional performance both in the generation of specific DNA probes and in the accuracy of its underlying predictive model.
 
-| Metric | Value |
-| :--- | :--- |
-| Mean Intra-Class Hybridization | 0.973 |
-| Mean Inter-Class Hybridization | 0.0070 |
-| Classification F1-Score (Diptera) | 0.84 - 0.98 |
+#### End-to-End Framework Performance
 
-These computational results were further validated by *in vitro* experiments, where a generated probe showed a **3- to 6-fold stronger signal** against its target species compared to non-targets.
+The primary model successfully generates highly specific 59-nt DNA probes. Computational analysis shows a near-perfect distinction between same-class and different-class binding, indicating high molecular orthogonality.
 
-## 📄 Citation
+| Evaluation Metric | Mean | Standard Deviation |
+| :--- | :---: | :---: |
+| **Same-Class Hybridization (↑)** | **0.973** | 0.0977 |
+| **Different-Class Hybridization (↓)** | **0.0070** | 0.0411 |
 
-If you use this work in your research, please consider citing our paper:
+These computational results were further validated by *in vitro* experiments, where a generated probe showed a **3- to 6-fold stronger signal** against its target species compared to non-targets, confirming the real-world functionality of our approach.
 
-```bibtex
-@article{your_article_name,
-  title={Translating Visual Phenotypes into Functional DNA Probes via an End-to-End Deep Learning Framework},
-  author={Your Name, et al.},
-  journal={Journal Name},
-  year={Year},
-  pages={Pages}
-}
-```
+#### DNA Hybridization Predictor Performance
 
-## 📜 License
+The success of the end-to-end framework is underpinned by our highly accurate DNA Hybridization Predictor. When benchmarked against other models, our custom CNN architecture demonstrated superior performance in predicting hybridization outcomes.
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+| Metric | **Ours** | QDA | RF | NN | RNN | CNN | RoBERTa |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **AUROC (↑)** | **0.973** | 0.922 | 0.938 | 0.930 | 0.968 | 0.956 | 0.949 |
+| **MSE (↓)** | **0.0438** | N/A | N/A | N/A | 0.7666 | 1.0955 | 1.3363 |
+
+This state-of-the-art predictive accuracy ensures that the main framework receives a high-fidelity supervisory signal, enabling it to learn the complex sequence-to-function relationship effectively.
+
