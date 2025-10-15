@@ -1,0 +1,268 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import pandas as pd
+from torch.utils.data import DataLoader, TensorDataset
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+import random
+from sklearn.metrics import roc_curve, auc, precision_recall_curve
+
+torch.set_float32_matmul_precision('medium')
+
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    pl.seed_everything(seed)
+
+set_seed(42)
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+BATCH_SIZE = 64
+LEARNING_RATE = 0.0001
+WEIGHT_DECAY = 1e-4
+MAX_EPOCHS = 300
+PATIENCE = 20
+SEQ_LENGTH = 59
+SAVE_DIR = '/media/4T2/lmd/shiying/predictor/model_59nt'
+
+TRAIN_FILES = []
+VAL_FILES = []
+TEST_FILES = []
+
+class CNNRegression(pl.LightningModule):
+    def __init__(self):
+        super(CNNRegression, self).__init__()
+        self.conv2d_block = nn.Sequential(
+            nn.Conv2d(2, 1280, kernel_size=(4, 9), padding=(0, 4)),
+            nn.ReLU(),
+            nn.BatchNorm2d(1280),
+            nn.Dropout2d(0.4),
+        )
+        self.conv1d_block = nn.Sequential(
+            nn.Conv1d(1280, 512, kernel_size=9, padding=4),
+            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.Conv1d(512, 256, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Conv1d(256, 128, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.BatchNorm1d(128),
+            nn.Dropout(0.4),
+            nn.Conv1d(128, 128, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.BatchNorm1d(128),
+            nn.Conv1d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.AdaptiveAvgPool1d(10),
+        )
+        self.residual_conv1 = nn.Conv1d(1280, 128, kernel_size=1)
+        self.residual_conv2 = nn.Conv1d(128, 64, kernel_size=1)
+        self.lin_block = nn.Sequential(
+            nn.Linear(64 * 10, 512),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.conv2d_block(x)
+        x = x.squeeze(2)
+        residual1 = x
+        x = self.conv1d_block[0:3](x)
+        x = self.conv1d_block[3:9](x)
+        residual1 = self.residual_conv1(residual1)
+        x = x + residual1
+        residual2 = x
+        x = self.conv1d_block[9:16](x)
+        residual2 = self.residual_conv2(residual2)
+        x = x + residual2
+        x = self.conv1d_block[16:](x)
+        x = x.view(x.size(0), -1)
+        x = self.lin_block(x)
+        return x
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x).squeeze(-1)
+        y = y.view(-1)
+        weights = torch.where(y > 0.9, 4.0, torch.where(y >= 0.5, 2.0, torch.where(y < 0.001, 3.0,
+                            torch.where((y >= 0.01) & (y < 0.05), 2.5, 1.0))))
+        mse_loss = (F.huber_loss(y_hat, y, reduction='none', delta=0.1) * weights).mean()
+        bce_loss = F.binary_cross_entropy(y_hat, y)
+        loss = 0.85 * mse_loss + 0.15 * bce_loss
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x).squeeze(-1)
+        y = y.view(-1)
+        weights = torch.where(y > 0.9, 4.0, torch.where(y >= 0.5, 2.0, torch.where(y < 0.001, 3.0,
+                            torch.where((y >= 0.01) & (y < 0.05), 2.5, 1.0))))
+        mse_loss = (F.huber_loss(y_hat, y, reduction='none', delta=0.1) * weights).mean()
+        bce_loss = F.binary_cross_entropy(y_hat, y)
+        loss = 0.85 * mse_loss + 0.15 * bce_loss
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.val_outputs = getattr(self, 'val_outputs', [])
+        self.val_outputs.append({'y': y.cpu(), 'y_hat': y_hat.cpu()})
+        return loss
+
+    def on_validation_epoch_end(self):
+        y_all = torch.cat([output['y'] for output in self.val_outputs])
+        y_hat_all = torch.cat([output['y_hat'] for output in self.val_outputs])
+        try:
+            fpr, tpr, _ = roc_curve((y_all >= 0.5).numpy(), y_hat_all.numpy())
+            roc_auc = auc(fpr, tpr)
+            self.log('val_auc', roc_auc, on_epoch=True, prog_bar=True)
+            os.makedirs(SAVE_DIR, exist_ok=True)
+        except Exception:
+            pass
+        self.val_outputs = []
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x).squeeze(-1)
+        y = y.view(-1)
+        loss = F.huber_loss(y_hat, y, delta=0.1)
+        y_binary = (y >= 0.2).float()
+        y_hat_binary = (y_hat >= 0.2).float()
+        accuracy = (y_binary == y_hat_binary).float().mean()
+        TP = ((y_binary == 1) & (y_hat_binary == 1)).float().sum()
+        TN = ((y_binary == 0) & (y_hat_binary == 0)).float().sum()
+        FP = ((y_binary == 0) & (y_hat_binary == 1)).float().sum()
+        FN = ((y_binary == 1) & (y_hat_binary == 0)).float().sum()
+        self.test_outputs = getattr(self, 'test_outputs', [])
+        self.test_outputs.append({
+            'y': y.cpu(), 'y_hat': y_hat.cpu(),
+            'TP': TP.cpu(), 'TN': TN.cpu(), 'FP': FP.cpu(), 'FN': FN.cpu()
+        })
+        self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('test_accuracy', accuracy, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def on_test_epoch_end(self):
+        y_all = torch.cat([output['y'] for output in self.test_outputs])
+        y_hat_all = torch.cat([output['y_hat'] for output in self.test_outputs])
+        ss_tot = ((y_all - y_all.mean()) ** 2).sum()
+        ss_res = ((y_all - y_hat_all) ** 2).sum()
+        r2 = 1 - ss_res / (ss_tot + 1e-8)
+        self.log('test_r2', r2, on_epoch=True, prog_bar=True)
+        TP = sum([output['TP'] for output in self.test_outputs])
+        TN = sum([output['TN'] for output in self.test_outputs])
+        FP = sum([output['FP'] for output in self.test_outputs])
+        FN = sum([output['FN'] for output in self.test_outputs])
+        numerator = (TP * TN) - (FP * FN)
+        denominator = torch.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN) + 1e-8)
+        mcc = numerator / denominator if denominator != 0 else 0.0
+        self.log('test_mcc', mcc, on_epoch=True, prog_bar=True)
+        try:
+            fpr, tpr, _ = roc_curve((y_all >= 0.2).numpy(), y_hat_all.numpy())
+            roc_auc = auc(fpr, tpr)
+            self.log('test_auc', roc_auc, on_epoch=True, prog_bar=True)
+            precision, recall, _ = precision_recall_curve((y_all >= 0.2).numpy(), y_hat_all.numpy())
+            pr_auc = auc(recall, precision)
+            self.log('test_pr_auc', pr_auc, on_epoch=True, prog_bar=True)
+        except Exception:
+            pass
+        self.test_outputs = []
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler, 'monitor': 'val_loss',
+                'interval': 'epoch', 'frequency': 1
+            }
+        }
+
+def reverse_complement(seq):
+    complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+    return ''.join(complement.get(base, base) for base in reversed(seq.upper()))
+
+def load_and_preprocess_data(file_paths, seq_length=SEQ_LENGTH):
+    nucleotide_map = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+    seq_list = []
+    labels = []
+    for file_path in file_paths:
+        df = pd.read_excel(file_path)
+        try:
+            df['yield'] = df['yield'].astype(str).apply(lambda x: float(x)).round(4)
+        except ValueError:
+            continue
+        df = df[df['yield'] <= 1.0]
+        invalid_rows = df[(df['seq1'].str.len() != seq_length) | (df['seq2'].str.len() != seq_length)].index
+        df = df.drop(invalid_rows)
+        for _, row in df.iterrows():
+            seq1, seq2, yield_val = str(row['seq1']), str(row['seq2']), row['yield']
+            if random.random() < 0.5:
+                seq1 = reverse_complement(seq1)
+            if random.random() < 0.5:
+                seq2 = reverse_complement(seq2)
+            tensor1 = torch.zeros(4, seq_length)
+            tensor2 = torch.zeros(4, seq_length)
+            try:
+                for j, base in enumerate(seq1.upper()):
+                    tensor1[nucleotide_map[base], j] = 1
+                for j, base in enumerate(seq2.upper()):
+                    tensor2[nucleotide_map[base], j] = 1
+            except KeyError:
+                continue
+            seq_pair = torch.stack([tensor1, tensor2], dim=0)
+            seq_list.append(seq_pair)
+            labels.append(yield_val)
+    X = torch.stack(seq_list)
+    y = torch.tensor(labels, dtype=torch.float32)
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    return X, y
+
+if __name__ == '__main__':
+    train_X, train_y = load_and_preprocess_data(TRAIN_FILES)
+    val_X, val_y = load_and_preprocess_data(VAL_FILES)
+    test_X, test_y = load_and_preprocess_data(TEST_FILES)
+
+    train_dataset = TensorDataset(train_X, train_y)
+    val_dataset = TensorDataset(val_X, val_y)
+    test_dataset = TensorDataset(test_X, test_y)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    
+    model = CNNRegression().to(DEVICE)
+
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=SAVE_DIR,
+        filename='cnn_59nt_{epoch:02d}_{val_loss:.4f}',
+        monitor='val_loss', mode='min', save_top_k=1
+    )
+    early_stopping = EarlyStopping(monitor='val_loss', patience=PATIENCE, mode='min')
+
+    trainer = pl.Trainer(
+        max_epochs=MAX_EPOCHS,
+        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        devices=1, callbacks=[checkpoint_callback, early_stopping],
+        log_every_n_steps=10, gradient_clip_val=1.0
+    )
+
+    trainer.fit(model, train_loader, val_loader)
+    trainer.test(model, test_loader)
+
+    torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'final_cnn2_59nt.pth'))
