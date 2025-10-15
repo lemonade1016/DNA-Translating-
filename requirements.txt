@@ -1,0 +1,30 @@
+# -----------------------------------------------------------------------------
+# Requirements for the DNA-Translating Project
+# -----------------------------------------------------------------------------
+# This file lists the Python packages required to run the training scripts
+# (train_predictor.py and train_end_to_end.py).
+
+# It is recommended to install these packages in a dedicated virtual environment.
+# Example:
+# python -m venv venv
+# source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+# pip install -r requirements.txt
+# -----------------------------------------------------------------------------
+
+# Core deep learning frameworks
+# For PyTorch, it is HIGHLY recommended to visit the official website to get
+# the correct installation command for your specific system (OS, package manager, CUDA version).
+# Website: https://pytorch.org/get-started/locally/
+torch>=2.0.0
+torchvision>=0.15.0
+pytorch-lightning>=2.0.0
+
+# Data handling and numerical operations
+numpy>=1.21.0
+pandas>=2.0.0
+
+# Utility for reading Excel files with pandas
+openpyxl>=3.0.0
+
+# Machine learning metrics and utilities
+scikit-learn>=1.1.0
