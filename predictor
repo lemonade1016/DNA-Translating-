@@ -97,6 +97,7 @@ class CNNRegression(pl.LightningModule):
         x = self.lin_block(x)
         return x
 
+
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x).squeeze(-1)
